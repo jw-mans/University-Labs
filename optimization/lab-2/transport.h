@@ -84,31 +84,39 @@ public:
                vector<vector<double>>& x,
                vector<pair<int,int>>& basis) const override {
         int m = prob.numSuppliers(), n = prob.numConsumers();
+
+        // Инициализируем план нулями
         x.assign(m, vector<double>(n, 0.0));
         basis.clear();
 
+        // Копируем запасы и потребности — будем их уменьшать по мере заполнения
         vector<double> supply = prob.supply;
         vector<double> demand = prob.demand;
 
+        // Начинаем с северо-западного угла (i=0, j=0)
         int i = 0, j = 0;
         while (i < m && j < n) {
+            // Пропускаем поставщика, если его запас исчерпан
             if (supply[i] < EPS) { ++i; continue; }
+            // Пропускаем потребителя, если его потребность удовлетворена
             if (demand[j] < EPS) { ++j; continue; }
 
+            // Назначаем максимально возможное количество — минимум из остатка запаса и потребности
             double amount = min(supply[i], demand[j]);
             x[i][j] = amount;
-            basis.push_back({i, j});
+            basis.push_back({i, j});  // Ячейка входит в базис
             supply[i] -= amount;
             demand[j] -= amount;
 
             if (supply[i] < EPS && demand[j] < EPS) {
-                // Degeneracy: add a zero-valued basis cell
+                // Вырожденность: оба исчерпаны одновременно — добавляем нулевую базисную ячейку,
+                // чтобы сохранить размер базиса m+n-1, и двигаемся по строке или столбцу
                 if (i + 1 < m)      { basis.push_back({i + 1, j}); ++i; }
                 else if (j + 1 < n) { basis.push_back({i, j + 1}); ++j; }
             } else if (supply[i] < EPS) {
-                ++i;
+                ++i;  // Запас поставщика i исчерпан — переходим к следующему поставщику
             } else {
-                ++j;
+                ++j;  // Потребность потребителя j удовлетворена — переходим к следующему потребителю
             }
         }
 
@@ -128,26 +136,34 @@ protected:
     vector<pair<int,int>> basis;
     unique_ptr<InitialPlanBuilder> strategy;
 
+    // MODI, шаг 1: вычисляем потенциалы u[i] и v[j] из условия u[i]+v[j]=c[i][j] для базисных ячеек.
+    // Фиксируем u[0]=0, остальные потенциалы находим итеративно по уже известным соседям.
     bool computePotentials(vector<double>& u, vector<double>& v) const {
         int m = prob.numSuppliers(), n = prob.numConsumers();
         u.assign(m, numeric_limits<double>::quiet_NaN());
         v.assign(n, numeric_limits<double>::quiet_NaN());
-        u[0] = 0.0;
+        u[0] = 0.0;  // Опорное значение — один потенциал задаём свободно
 
         bool changed;
         do {
             changed = false;
             for (const auto& [r, c] : basis) {
+                // Если известен u[r], находим v[c] = c[r][c] - u[r]
                 if (!isnan(u[r]) && isnan(v[c]))  { v[c] = prob.cost[r][c] - u[r]; changed = true; }
+                // Если известен v[c], находим u[r] = c[r][c] - v[c]
                 else if (!isnan(v[c]) && isnan(u[r])) { u[r] = prob.cost[r][c] - v[c]; changed = true; }
             }
-        } while (changed);
+        } while (changed);  // Повторяем, пока хоть один потенциал не определён
 
+        // Если остались NaN — базис несвязен, метод неприменим
         for (double ui : u) if (isnan(ui)) return false;
         for (double vj : v) if (isnan(vj)) return false;
         return true;
     }
 
+    // MODI, шаг 2: ищем небазисную ячейку с наибольшим отрицательным оценочным числом
+    // delta[i][j] = c[i][j] - (u[i] + v[j]).
+    // Если все delta >= 0 — план оптимален. Иначе — берём ячейку с минимальным delta (наибольшее улучшение).
     pair<int,int> findEnteringCell(const vector<double>& u, const vector<double>& v,
                                    double& minDelta) const {
         set<pair<int,int>> basisSet(basis.begin(), basis.end());
@@ -156,21 +172,25 @@ protected:
 
         for (int i = 0; i < prob.numSuppliers(); ++i)
             for (int j = 0; j < prob.numConsumers(); ++j) {
-                if (basisSet.count({i, j})) continue;
-                double delta = prob.cost[i][j] - (u[i] + v[j]);
+                if (basisSet.count({i, j})) continue;  // Пропускаем базисные ячейки
+                double delta = prob.cost[i][j] - (u[i] + v[j]);  // Оценочное число
                 if (delta < -EPS && (entering.first == -1 || delta < minDelta)) {
                     minDelta = delta;
-                    entering = {i, j};
+                    entering = {i, j};  // Запоминаем «лучшую» входящую ячейку
                 }
             }
         return entering;
     }
 
+    // MODI, шаг 3: DFS для построения цикла пересчёта.
+    // Цикл — замкнутый путь по базисным ячейкам с чередованием горизонтальных и вертикальных ходов,
+    // начинающийся и заканчивающийся во входящей ячейке.
+    // lastDir: -1=начало, 0=шли горизонтально, 1=шли вертикально (направление чередуется).
     static bool cycleDFS(pair<int,int> cur, pair<int,int> start, int lastDir,
                          vector<pair<int,int>>& path, const set<pair<int,int>>& avail) {
-        if (cur == start && !path.empty()) return true;
+        if (cur == start && !path.empty()) return true;  // Цикл замкнулся
 
-        // Horizontal (dir=0): same row, different column
+        // Горизонтальный ход (dir=0): ищем ячейку в той же строке
         if (lastDir != 0)
             for (const auto& cell : avail) {
                 if (cell.first != cur.first || cell.second == cur.second) continue;
@@ -182,7 +202,7 @@ protected:
                 }
             }
 
-        // Vertical (dir=1): same column, different row
+        // Вертикальный ход (dir=1): ищем ячейку в том же столбце
         if (lastDir != 1)
             for (const auto& cell : avail) {
                 if (cell.second != cur.second || cell.first == cur.first) continue;
@@ -197,7 +217,9 @@ protected:
         return false;
     }
 
+    // MODI, шаг 4: запускаем DFS, формируем полный цикл начиная с входящей ячейки.
     vector<pair<int,int>> buildCycle(pair<int,int> entering) const {
+        // Доступные узлы цикла — все базисные ячейки плюс входящая
         set<pair<int,int>> avail(basis.begin(), basis.end());
         avail.insert(entering);
 
@@ -207,12 +229,15 @@ protected:
             return {};
         }
 
+        // Собираем цикл: входящая ячейка + найденный путь (без дублирования конечной точки)
         vector<pair<int,int>> cycle = {entering};
         cycle.insert(cycle.end(), path.begin(), path.end());
         if (cycle.size() > 1 && cycle.back() == entering) cycle.pop_back();
         return cycle;
     }
 
+    // MODI, шаг 5: находим theta — максимальное количество, которое можно перераспределить.
+    // theta = минимум из значений x в "минусовых" ячейках цикла (нечётные позиции).
     double findTheta(const vector<pair<int,int>>& cycle) const {
         double theta = numeric_limits<double>::max();
         for (size_t k = 1; k < cycle.size(); k += 2)
@@ -220,18 +245,23 @@ protected:
         return theta;
     }
 
+    // MODI, шаг 6: перераспределяем поставки вдоль цикла на theta.
+    // Чётные ячейки цикла ("+") получают +theta, нечётные ("-") теряют -theta.
+    // Ячейка, обнулившаяся в минусах, выходит из базиса; входящая — входит.
     void redistribute(const vector<pair<int,int>>& cycle, double theta, pair<int,int> entering) {
         for (size_t k = 0; k < cycle.size(); ++k) {
             auto [i, j] = cycle[k];
             x[i][j] += (k % 2 == 0) ? theta : -theta;
         }
 
+        // Ищем выходящую ячейку — ту, которая стала нулевой в минусах (нечётные позиции цикла)
         pair<int,int> leaving = {-1, -1};
         for (size_t k = 1; k < cycle.size(); k += 2)
             if (x[cycle[k].first][cycle[k].second] < EPS) { leaving = cycle[k]; break; }
 
         if (leaving.first == -1) { cerr << "Error: leaving cell not found (theta=" << theta << ")\n"; return; }
 
+        // Удаляем выходящую ячейку из базиса и добавляем входящую
         auto it = find(basis.begin(), basis.end(), leaving);
         if (it != basis.end()) basis.erase(it);
         else cerr << "Warning: leaving cell not found in basis\n";
@@ -261,12 +291,14 @@ public:
     virtual ~TransportSolver() = default;
 
     virtual void solve() {
+        // Метод MODI (метод потенциалов) работает только с балансированной задачей
         if (!prob.isBalanced()) {
             cerr << "Error: problem is not balanced (supply=" << prob.totalSupply()
                  << ", demand=" << prob.totalDemand() << ")\n";
             return;
         }
 
+        // Шаг 0: строим начальный допустимый план выбранным методом (например, СЗУ)
         strategy->build(prob, x, basis);
         cout << "Initial plan (" << strategy->name() << "):\n";
         printPlan();
@@ -274,24 +306,33 @@ public:
 
         int iter = 0;
         while (true) {
+            // Шаг 1: вычисляем потенциалы u[i], v[j] по текущему базису
             vector<double> u, v;
             if (!computePotentials(u, v)) {
                 cerr << "Error: failed to compute potentials (basis disconnected).\n";
                 break;
             }
 
+            // Шаг 2: проверяем критерий оптимальности — ищем ячейку с delta < 0
             double minDelta;
             auto entering = findEnteringCell(u, v, minDelta);
-            if (entering.first == -1) { cout << "Optimal plan reached!\n"; break; }
+            if (entering.first == -1) { 
+                cout << "Optimal plan reached!\n"; 
+                break; 
+            }  // Все delta >= 0 — оптимум
 
             cout << "Iter " << ++iter << ": entering (" << entering.first << ","
                  << entering.second << ") delta=" << minDelta << "\n";
 
+            // Шаг 3-4: строим цикл пересчёта через входящую ячейку
             auto cycle = buildCycle(entering);
             if (cycle.empty()) break;
 
+            // Шаг 5: находим величину перераспределения
             double theta = findTheta(cycle);
             cout << "  theta=" << theta << "\n";
+
+            // Шаг 6: перераспределяем поставки, обновляем базис
             redistribute(cycle, theta, entering);
 
             cout << "  Plan after redistribution:\n";
