@@ -328,6 +328,13 @@ public:
             auto cycle = buildCycle(entering);
             if (cycle.empty()) break;
 
+            cout << "  Cycle: ";
+            for (size_t k = 0; k < cycle.size(); ++k) {
+                cout << "(" << cycle[k].first << "," << cycle[k].second << ")";
+                if (k + 1 < cycle.size()) cout << " -> ";
+            }
+            cout << " -> (" << cycle[0].first << "," << cycle[0].second << ")\n";
+
             // Шаг 5: находим величину перераспределения
             double theta = findTheta(cycle);
             cout << "  theta=" << theta << "\n";
