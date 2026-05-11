@@ -1,0 +1,1 @@
+Перенесено в https://github.com/jw-mans/sphinx-ai
