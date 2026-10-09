@@ -50,6 +50,19 @@ def d2u_exact(x):
             + np.exp(-x))
 
 
+# третья и четвертая производные нужны для разбора разложения погрешности
+def d3u_exact(x):
+    return (-12 * np.pi ** 2 * np.sin(2 * np.pi * x)
+            - 8 * np.pi ** 3 * x * np.cos(2 * np.pi * x)
+            - np.exp(-x))
+
+
+def d4u_exact(x):
+    return (-32 * np.pi ** 3 * np.cos(2 * np.pi * x)
+            + 16 * np.pi ** 4 * x * np.sin(2 * np.pi * x)
+            + np.exp(-x))
+
+
 # согласованные правые части
 def f_star(x):
     return -d2u_exact(x) + p(x) * du_exact(x) + q(x) * u_exact(x)

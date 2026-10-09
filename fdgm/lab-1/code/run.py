@@ -192,6 +192,59 @@ def even_check(order, ns, node='a'):
     return [(n, d[n], d[n] / d[2 * n]) for n in ns[:-2]]
 
 
+def h3_cancellation(n_fine=20000):
+    """Проверка вывода о том, что член h^3 в погрешности схемы B исчезает.
+
+    Погрешность ищется в виде z_h = h^2 w2 + h^3 w3 + O(h^4). Функция w2
+    решает краевую задачу
+
+        A w2 = psi2,   psi2 = -u''''/12 + p u'''/6,
+        -alpha_a w2'(a) + beta_a w2(a) = -alpha_a u'''(a)/6,
+         alpha_b w2'(b) + beta_b w2(b) =  alpha_b u'''(b)/6,
+
+    а для w3 получается однородная задача при условии, что
+
+        B1 w2 = -alpha_a u''''(a)/24,   C1 w2 = -alpha_b u''''(b)/24,
+
+    где B1 и C1 -- коэффициенты при h в разложении краевых уравнений:
+
+        B1 w = ( -alpha_a w''(a) + alpha_a q(a) w(a) + beta_a p(a) w(a) ) / 2,
+        C1 w = ( -alpha_b w''(b) + alpha_b q(b) w(b) - beta_b p(b) w(b) ) / 2.
+
+    Функция проверяет оба равенства численно и заодно сравнивает z_h/h^2
+    с w2 в узле x = a.
+    """
+    def psi2(x):
+        return -pb.d4u_exact(x) / 12 + pb.p(x) * pb.d3u_exact(x) / 6
+
+    _, w2 = sc.solve(n_fine, 2, f=psi2,
+                      ga=-pb.ALPHA_A * pb.d3u_exact(pb.A) / 6,
+                      gb=pb.ALPHA_B * pb.d3u_exact(pb.B) / 6)
+    h = (pb.B - pb.A) / n_fine
+    N = n_fine
+
+    # односторонние вторые производные второго порядка точности
+    w2pp_a = (2 * w2[0] - 5 * w2[1] + 4 * w2[2] - w2[3]) / h ** 2
+    w2pp_b = (2 * w2[N] - 5 * w2[N - 1] + 4 * w2[N - 2] - w2[N - 3]) / h ** 2
+
+    b1 = 0.5 * (-pb.ALPHA_A * w2pp_a + pb.ALPHA_A * pb.q(pb.A) * w2[0]
+                + pb.BETA_A * pb.p(pb.A) * w2[0])
+    c1 = 0.5 * (-pb.ALPHA_B * w2pp_b + pb.ALPHA_B * pb.q(pb.B) * w2[N]
+                - pb.BETA_B * pb.p(pb.B) * w2[N])
+
+    print('\nПроверка сокращения члена h^3 (схема B)')
+    print('  B1 w2 = %10.4f,  -alpha_a u4(a)/24 = %10.4f'
+          % (b1, -pb.ALPHA_A * pb.d4u_exact(pb.A) / 24))
+    print('  C1 w2 = %10.4f,  -alpha_b u4(b)/24 = %10.4f'
+          % (c1, -pb.ALPHA_B * pb.d4u_exact(pb.B) / 24))
+    print('  w2(a) = %10.6f' % w2[0])
+    print('%8s %14s %12s' % ('n', 'z_h(a)/h^2', 'отличие'))
+    for n in (200, 400, 800, 1600):
+        x, v = sc.solve(n, 2)
+        e0 = (pb.u_exact(x[0]) - v[0]) / ((pb.B - pb.A) / n) ** 2
+        print('%8d %14.6f %12.2e' % (n, e0, e0 - w2[0]))
+
+
 def fig_runge(rows1, rows2):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     for ax, rows, order, kref in ((axes[0], rows1, 1, 2),
@@ -285,6 +338,8 @@ def main():
     for order in (1, 2):
         for n, d, r in even_check(order, [40 * 2 ** j for j in range(6)]):
             print('%8s %8d %14.3e %8.2f' % ('O(h^%d)' % order, n, d, r))
+
+    h3_cancellation()
 
     print('\nГрафики:', os.path.normpath(FIG))
 
